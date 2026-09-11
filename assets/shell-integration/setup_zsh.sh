@@ -1440,10 +1440,15 @@ _kaku_set_ai_user_var() {
     local capability_file="\$HOME/.config/kaku/ai_inline_capability"
     local capability=""
 
-    [[ -r "\$capability_file" ]] || return 1
-    # read reports EOF as failure when the file lacks a trailing newline,
-    # but still fills the variable; accept that case (#511).
-    IFS= read -r capability < "\$capability_file" || [[ -n "\$capability" ]] || return 1
+    # SSH sessions do not normally share the local HOME. The SSH wrapper
+    # forwards this value when the server permits SetEnv; keep the file
+    # fallback for local shells and older connections.
+    capability="\${KAKU_AI_INLINE_CAPABILITY:-}"
+    if [[ -z "\$capability" && -r "\$capability_file" ]]; then
+        # read reports EOF as failure when the file lacks a trailing newline,
+        # but still fills the variable; accept that case (#511).
+        IFS= read -r capability < "\$capability_file" || [[ -n "\$capability" ]] || return 1
+    fi
     [[ -n "\$capability" ]] || return 1
     _kaku_set_user_var "\$name" "\${capability}:\${value}"
 }
@@ -1617,10 +1622,34 @@ if (( \$+aliases[ssh] )); then
             fi
         fi
 
+        local -a ai_env_opts=()
+        local ai_capability="\${KAKU_AI_INLINE_CAPABILITY:-}"
+        if [[ -z "\$ai_capability" && -r "\$HOME/.config/kaku/ai_inline_capability" ]]; then
+            IFS= read -r ai_capability < "\$HOME/.config/kaku/ai_inline_capability" || true
+        fi
+        if [[ -n "\$ai_capability" ]]; then
+            ai_env_opts+=(-o "SetEnv=KAKU_AI_INLINE_CAPABILITY=\${ai_capability}")
+        fi
+        local seen_destination=false has_remote_command=false option_value=false arg
+        for arg in "\${_kaku_ssh_args[@]}"; do
+            if \$option_value; then option_value=false; continue; fi
+            if \$seen_destination; then has_remote_command=true; break; fi
+            if [[ "\$arg" == -- ]]; then seen_destination=true; continue; fi
+            if [[ "\$arg" == -* ]]; then
+                case "\$arg" in
+                    -p|-i|-F|-J|-l|-b|-c|-D|-E|-L|-R|-S|-W|-B|-o) option_value=true ;;
+                esac
+            else
+                seen_destination=true
+            fi
+        done
+        if [[ -n "\$ai_capability" && \$seen_destination == true && \$has_remote_command == false && -t 0 && -t 1 ]]; then
+            _kaku_ssh_args+=("export KAKU_AI_INLINE_CAPABILITY='\${ai_capability}'; exec \"\${SHELL:-sh}\" -l")
+        fi
         if [[ -z "\${KAKU_SSH_SKIP_TERM_FIX-}" && "\$TERM" == "kaku" ]]; then
-            TERM=xterm-256color "\${_kaku_ssh_cmd[@]}" "\${extra_opts[@]}" "\${_kaku_ssh_args[@]}"
+            TERM=xterm-256color "\${_kaku_ssh_cmd[@]}" "\${extra_opts[@]}" "\${ai_env_opts[@]}" "\${_kaku_ssh_args[@]}"
         else
-            "\${_kaku_ssh_cmd[@]}" "\${extra_opts[@]}" "\${_kaku_ssh_args[@]}"
+            "\${_kaku_ssh_cmd[@]}" "\${extra_opts[@]}" "\${ai_env_opts[@]}" "\${_kaku_ssh_args[@]}"
         fi
     }
     unalias ssh
@@ -1639,10 +1668,35 @@ function ssh {
             \$has_identitiesonly || extra_opts+=(-o "IdentitiesOnly=yes")
         fi
     fi
+    local -a ai_env_opts=()
+    local ai_capability="\${KAKU_AI_INLINE_CAPABILITY:-}"
+    if [[ -z "\$ai_capability" && -r "\$HOME/.config/kaku/ai_inline_capability" ]]; then
+        IFS= read -r ai_capability < "\$HOME/.config/kaku/ai_inline_capability" || true
+    fi
+    if [[ -n "\$ai_capability" ]]; then
+        ai_env_opts+=(-o "SetEnv=KAKU_AI_INLINE_CAPABILITY=\${ai_capability}")
+    fi
+    local seen_destination=false has_remote_command=false option_value=false arg
+    for arg in "\$@"; do
+        if \$option_value; then option_value=false; continue; fi
+        if \$seen_destination; then has_remote_command=true; break; fi
+        if [[ "\$arg" == -- ]]; then seen_destination=true; continue; fi
+        if [[ "\$arg" == -* ]]; then
+            case "\$arg" in
+                -p|-i|-F|-J|-l|-b|-c|-D|-E|-L|-R|-S|-W|-B|-o) option_value=true ;;
+            esac
+        else
+            seen_destination=true
+        fi
+    done
+    local -a ssh_args=("\$@")
+    if [[ -n "\$ai_capability" && \$seen_destination == true && \$has_remote_command == false && -t 0 && -t 1 ]]; then
+        ssh_args+=("export KAKU_AI_INLINE_CAPABILITY='\${ai_capability}'; exec \"\${SHELL:-sh}\" -l")
+    fi
     if [[ -z "\${KAKU_SSH_SKIP_TERM_FIX-}" && "\$TERM" == "kaku" ]]; then
-        TERM=xterm-256color command ssh "\${extra_opts[@]}" "\$@"
+        TERM=xterm-256color command ssh "\${extra_opts[@]}" "\${ai_env_opts[@]}" "\${ssh_args[@]}"
     else
-        command ssh "\${extra_opts[@]}" "\$@"
+        command ssh "\${extra_opts[@]}" "\${ai_env_opts[@]}" "\${ssh_args[@]}"
     fi
 }
 fi

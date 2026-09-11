@@ -18,6 +18,7 @@ pub(crate) const TITLE_MAX_CHARS: usize = 40;
 
 use crate::ai_client::{should_roundtrip_reasoning_content, AiClient, ApiMessage, ApiMode};
 use crate::ai_conversations::{self, PersistedMessage};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -409,6 +410,7 @@ pub(crate) fn run_agent(
     let mut summarize_cooldown: usize = 0;
     let responses_mode = client.config().effective_api_mode() == ApiMode::Responses;
     let mut responses_state = ResponsesTranscript::default();
+    let mut repeated_tool_calls: HashMap<String, usize> = HashMap::new();
     // Bound the entire user turn before chunks reach the overlay, where each
     // grapheme is queued separately for paced rendering.
     let streamed_output_bytes = std::cell::Cell::new(0usize);
@@ -595,6 +597,22 @@ pub(crate) fn run_agent(
                 }
             };
 
+            let signature = tool_call_signature(&tc.name, &args, &tc.arguments);
+            let count = repeated_tool_calls.entry(signature).or_insert(0);
+            *count += 1;
+            if *count >= 5 {
+                let message = format!(
+                    "The agent repeated the same tool call {} times; stopping to avoid a loop.",
+                    *count
+                );
+                let _ = tx.send(StreamMsg::ToolFailed {
+                    error: message.clone(),
+                });
+                let _ = tx.send(StreamMsg::Err(message));
+                let _ = tx.send(StreamMsg::Done);
+                return;
+            }
+
             if tc.name == "fs_read" {
                 if let Err(error) = crate::ai_tools::paths::pin_read_arg(&mut args, &cwd) {
                     let err = error.to_string();
@@ -711,6 +729,32 @@ fn advertised_tool_names(
         .filter_map(|tool| tool["function"]["name"].as_str())
         .map(str::to_string)
         .collect()
+}
+
+fn tool_call_signature(name: &str, args: &serde_json::Value, raw_args: &str) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "tool": name,
+        "args": canonicalize_json(args),
+    }))
+    .unwrap_or_else(|_| format!("{}:{}", name, raw_args))
+}
+
+fn canonicalize_json(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(object) => {
+            let mut keys: Vec<_> = object.keys().collect();
+            keys.sort_unstable();
+            let mut sorted = serde_json::Map::new();
+            for key in keys {
+                sorted.insert(key.clone(), canonicalize_json(&object[key]));
+            }
+            serde_json::Value::Object(sorted)
+        }
+        serde_json::Value::Array(array) => {
+            serde_json::Value::Array(array.iter().map(canonicalize_json).collect())
+        }
+        other => other.clone(),
+    }
 }
 
 /// Raw Responses-API items accumulated across one user turn for persistence.
@@ -1155,6 +1199,21 @@ mod tests {
         assert!(allowed.contains("pwd"));
         assert!(!allowed.contains(calls[0].name.as_str()));
         assert!(advertised_tool_names(&[]).is_empty());
+    }
+
+    #[test]
+    fn repeated_tool_signature_normalizes_json_argument_order() {
+        let first = tool_call_signature(
+            "fs_read",
+            &serde_json::json!({"path":"/tmp/a","start_line":1}),
+            "fallback",
+        );
+        let second = tool_call_signature(
+            "fs_read",
+            &serde_json::json!({"start_line":1,"path":"/tmp/a"}),
+            "fallback",
+        );
+        assert_eq!(first, second);
     }
 
     #[test]

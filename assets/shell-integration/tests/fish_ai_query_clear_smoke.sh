@@ -46,6 +46,9 @@ grep -Fq 'if begin; test $_kaku_in_kaku = 1; or set -q KAKU_PROMPT_EVERYWHERE; e
 grep -Fq 'set -l capability_file "$HOME/.config/kaku/ai_inline_capability"' \
   "$kaku_fish" \
   || fail "generated kaku.fish did not read the inline AI capability"
+grep -Fq 'SetEnv=KAKU_AI_INLINE_CAPABILITY=' \
+  "$kaku_fish" \
+  || fail "generated kaku.fish did not forward the inline AI capability over ssh"
 
 if command -v fish >/dev/null 2>&1; then
   fish_bin="$(command -v fish)"

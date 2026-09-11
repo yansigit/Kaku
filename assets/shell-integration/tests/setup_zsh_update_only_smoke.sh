@@ -64,6 +64,9 @@ grep -Fq 'if { (( _kaku_in_kaku )) || [[ -n "${KAKU_PROMPT_EVERYWHERE:-}" ]]; } 
 grep -Fq 'local capability_file="$HOME/.config/kaku/ai_inline_capability"' \
   "$tmp_home/.config/kaku/zsh/kaku.zsh" \
   || fail "generated kaku.zsh did not read the inline AI capability"
+grep -Fq 'SetEnv=KAKU_AI_INLINE_CAPABILITY=' \
+  "$tmp_home/.config/kaku/zsh/kaku.zsh" \
+  || fail "generated kaku.zsh did not forward the inline AI capability over ssh"
 grep -Fq '_kaku_set_ai_user_var "kaku_ai_query" "[mode:${mode}] ${body}"' \
   "$tmp_home/.config/kaku/zsh/kaku.zsh" \
   || fail "generated kaku.zsh did not authenticate inline AI queries"

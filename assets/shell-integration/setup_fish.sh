@@ -774,11 +774,44 @@ end
 if not functions -q ssh
 function ssh
     set -l _kaku_extra
+    set -l _kaku_ai_capability "$KAKU_AI_INLINE_CAPABILITY"
+    if test -z "$_kaku_ai_capability"; and test -r "$HOME/.config/kaku/ai_inline_capability"
+        read -l _kaku_ai_capability < "$HOME/.config/kaku/ai_inline_capability"; or true
+    end
+    if test -n "$_kaku_ai_capability"
+        set _kaku_extra $_kaku_extra -o "SetEnv=KAKU_AI_INLINE_CAPABILITY=$_kaku_ai_capability"
+    end
+    set -l _kaku_seen_destination 0
+    set -l _kaku_has_remote_command 0
+    set -l _kaku_option_value 0
+    for _kaku_arg in $argv
+        if test "$_kaku_option_value" = 1
+            set _kaku_option_value 0
+            continue
+        end
+        if test "$_kaku_seen_destination" = 1
+            set _kaku_has_remote_command 1
+            break
+        end
+        if test "$_kaku_arg" = --
+            set _kaku_seen_destination 1
+        else if string match -q -- '-*' "$_kaku_arg"
+            switch "$_kaku_arg"
+                case -p -i -F -J -l -b -c -D -E -L -R -S -W -B -o
+                    set _kaku_option_value 1
+            end
+        else
+            set _kaku_seen_destination 1
+        end
+    end
+    if test -n "$_kaku_ai_capability"; and test "$_kaku_seen_destination" = 1; and test "$_kaku_has_remote_command" = 0; and isatty stdin; and isatty stdout
+        set argv $argv "export KAKU_AI_INLINE_CAPABILITY='$_kaku_ai_capability'; exec \"\${SHELL:-sh}\" -l"
+    end
     if not set -q KAKU_SSH_SKIP_1PASSWORD_FIX
         switch "$SSH_AUTH_SOCK"
             case '*1password*' '*2BUA8C4S2C*'
                 if not string match -q -- '*IdentitiesOnly=*' $argv
-                    set _kaku_extra -oIdentitiesOnly=yes
+                    set _kaku_extra $_kaku_extra -oIdentitiesOnly=yes
                 end
         end
     end
@@ -852,10 +885,12 @@ end
 # cannot trigger local AI requests or reuse the user's assistant credentials.
 function __kaku_set_ai_user_var
     set -l capability_file "$HOME/.config/kaku/ai_inline_capability"
-    test -r "$capability_file"; or return 1
-    # read reports EOF as failure when the file lacks a trailing newline,
-    # but still fills the variable; accept that case (#511).
-    read -l capability < "$capability_file"; or test -n "$capability"; or return 1
+    set -l capability "$KAKU_AI_INLINE_CAPABILITY"
+    if test -z "$capability"; and test -r "$capability_file"
+        # read reports EOF as failure when the file lacks a trailing newline,
+        # but still fills the variable; accept that case (#511).
+        read -l capability < "$capability_file"; or test -n "$capability"; or return 1
+    end
     test -n "$capability"; or return 1
     __kaku_set_user_var $argv[1] "$capability:$argv[2]"
 end

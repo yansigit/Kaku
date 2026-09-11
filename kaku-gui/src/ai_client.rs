@@ -773,9 +773,13 @@ impl AiClient {
         let mut attempt = 0;
         while attempt < max_attempts {
             if attempt > 0 {
-                std::thread::sleep(std::time::Duration::from_secs(1 << attempt));
-                if cancelled.load(Ordering::Relaxed) {
-                    anyhow::bail!("cancelled during retry backoff");
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_secs(1 << attempt);
+                while std::time::Instant::now() < deadline {
+                    if cancelled.load(Ordering::Relaxed) {
+                        anyhow::bail!("cancelled during retry backoff");
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
                 }
             }
             let response = match build(credential).send() {
@@ -2223,9 +2227,12 @@ fn send_with_retry(
     for attempt in 0..max_attempts {
         if attempt > 0 {
             let backoff = std::time::Duration::from_secs(1 << attempt);
-            std::thread::sleep(backoff);
-            if cancelled.load(Ordering::Relaxed) {
-                anyhow::bail!("cancelled during retry backoff");
+            let deadline = std::time::Instant::now() + backoff;
+            while std::time::Instant::now() < deadline {
+                if cancelled.load(Ordering::Relaxed) {
+                    anyhow::bail!("cancelled during retry backoff");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
         }
         let r = match req.try_clone().context("clone request")?.send() {
